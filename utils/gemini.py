@@ -1,5 +1,7 @@
 import os
+import json
 import time
+
 from dotenv import load_dotenv
 from google import genai
 
@@ -10,45 +12,35 @@ client = genai.Client(
 )
 
 
-def analyze_resume(resume_text):
+def analyze_resume(resume_text, ats_score):
 
     prompt = f"""
-You are an expert ATS Resume Analyzer.
+You are an expert Career Coach.
 
-Analyze the resume carefully.
+The ATS engine has already calculated the score.
 
-Return ONLY valid JSON.
+ATS Score:
 
-Do not explain anything.
-Do not use markdown.
-Do not use ```json.
-
-Return exactly this format:
-
-{{
-    "overall_score": 0,
-    "section_scores": {{
-        "contact_information": 0,
-        "professional_summary": 0,
-        "education": 0,
-        "skills": 0,
-        "projects": 0,
-        "experience": 0,
-        "ats_keywords": 0,
-        "formatting": 0
-    }},
-    "feedback": "",
-    "strengths": [],
-    "weaknesses": [],
-    "missing_keywords": [],
-    "ats_keywords": [],
-    "formatting_feedback": [],
-    "action_items": []
-}}
+{ats_score}
 
 Resume:
 
 {resume_text}
+
+Do NOT calculate any score.
+
+Return ONLY valid JSON.
+
+Return exactly this format:
+
+{{
+    "feedback":"",
+    "strengths":[],
+    "weaknesses":[],
+    "missing_keywords":[],
+    "formatting_feedback":[],
+    "action_items":[]
+}}
 """
 
     for attempt in range(3):
@@ -57,25 +49,19 @@ Resume:
 
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=prompt,
-                config={
-                    "temperature": 0
-                }
+                contents=prompt
             )
 
             text = response.text.strip()
 
-            if text.startswith("```json"):
-                text = text.replace("```json", "").replace("```", "").strip()
+            text = text.replace("```json", "")
+            text = text.replace("```", "")
 
-            elif text.startswith("```"):
-                text = text.replace("```", "").strip()
+            return text.strip()
 
-            return text
-
-        except Exception as e:
+        except Exception:
 
             if attempt == 2:
-                raise e
+                raise
 
             time.sleep(5)

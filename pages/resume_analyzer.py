@@ -2,6 +2,7 @@ import streamlit as st
 import json
 
 from utils.pdf_reader import extract_text
+from utils.ats_engine import calculate_ats_score
 from utils.gemini import analyze_resume
 
 st.set_page_config(
@@ -17,108 +18,126 @@ uploaded_file = st.file_uploader(
     type=["pdf"]
 )
 
+# Store analysis in session so we don't call Gemini repeatedly
+if "analysis" not in st.session_state:
+    st.session_state.analysis = None
+
+if "resume_name" not in st.session_state:
+    st.session_state.resume_name = None
+
 if uploaded_file:
 
-    resume = extract_text(uploaded_file)
+    # Reset cache if a different file is uploaded
+    if st.session_state.resume_name != uploaded_file.name:
+        st.session_state.analysis = None
+        st.session_state.resume_name = uploaded_file.name
+
+    resume_text = extract_text(uploaded_file)
 
     st.success("Resume uploaded successfully!")
 
     if st.button("Analyze Resume"):
 
-        with st.spinner("Analyzing Resume..."):
+        if st.session_state.analysis is None:
 
-            try:
+            with st.spinner("Analyzing Resume..."):
 
-                response = analyze_resume(resume)
+                try:
 
-                # Remove markdown if Gemini returns it
-                response = response.replace("```json", "")
-                response = response.replace("```", "")
-                response = response.strip()
+                    # ---------- Python ATS Engine ----------
+                    ats_result = calculate_ats_score(resume_text)
 
-                data = json.loads(response)
+                    score = ats_result["overall_score"]
 
-                # -----------------------
-                # ATS SCORE
-                # -----------------------
+                    # ---------- Gemini Feedback ----------
+                    response = analyze_resume(
+                        resume_text,
+                        score
+                    )
 
-                st.subheader("⭐ ATS Resume Score")
+                    response = response.replace("```json", "")
+                    response = response.replace("```", "")
 
-                score = data.get("overall_score", 0)
+                    ai_feedback = json.loads(response)
 
-                st.markdown(
-                    f"<h1 style='color:#4CAF50'>{score}/100</h1>",
-                    unsafe_allow_html=True
-                )
+                    st.session_state.analysis = {
+                        "score": score,
+                        "sections": ats_result["section_scores"],
+                        "feedback": ai_feedback
+                    }
 
-                st.progress(score / 100)
+                except Exception as e:
 
-                st.divider()
+                    st.error(f"Error: {e}")
+                    st.stop()
 
-                # -----------------------
-                # FEEDBACK
-                # -----------------------
+        result = st.session_state.analysis
 
-                st.header("📝 Feedback")
-                st.write(data.get("feedback", "No feedback available."))
+        score = result["score"]
+        sections = result["sections"]
+        feedback = result["feedback"]
 
-                st.divider()
+        # ==========================
+        # SCORE
+        # ==========================
 
-                # -----------------------
-                # STRENGTHS
-                # -----------------------
+        st.subheader("⭐ ATS Resume Score")
 
-                st.header("✅ Strengths")
+        st.metric("Overall Score", f"{score}/100")
 
-                for item in data.get("strengths", []):
-                    st.success(item)
+        st.progress(score / 100)
 
-                # -----------------------
-                # WEAKNESSES
-                # -----------------------
+        st.divider()
 
-                st.header("❌ Weaknesses")
+        # ==========================
+        # SECTION SCORES
+        # ==========================
 
-                for item in data.get("weaknesses", []):
-                    st.error(item)
+        st.subheader("📊 Section Scores")
 
-                # -----------------------
-                # MISSING KEYWORDS
-                # -----------------------
+        col1, col2 = st.columns(2)
 
-                st.header("🔍 Missing Keywords")
+        with col1:
+            st.metric("Contact", sections["contact_information"])
+            st.metric("Education", sections["education"])
+            st.metric("Skills", sections["skills"])
+            st.metric("Projects", sections["projects"])
 
-                for item in data.get("missing_keywords", []):
-                    st.warning(item)
+        with col2:
+            st.metric("Experience", sections["experience"])
+            st.metric("ATS Keywords", sections["ats_keywords"])
+            st.metric("Formatting", sections["formatting"])
 
-                # -----------------------
-                # ATS KEYWORDS
-                # -----------------------
+        st.divider()
 
-                st.header("🎯 ATS Keywords Found")
+        # ==========================
+        # FEEDBACK
+        # ==========================
 
-                for item in data.get("ats_keywords", []):
-                    st.info(item)
+        st.header("📝 Feedback")
+        st.write(feedback.get("feedback", ""))
 
-                # -----------------------
-                # FORMATTING
-                # -----------------------
+        st.header("✅ Strengths")
 
-                st.header("📑 Formatting Suggestions")
+        for item in feedback.get("strengths", []):
+            st.success(item)
 
-                for item in data.get("formatting_feedback", []):
-                    st.write("•", item)
+        st.header("❌ Weaknesses")
 
-                # -----------------------
-                # ACTION ITEMS
-                # -----------------------
+        for item in feedback.get("weaknesses", []):
+            st.error(item)
 
-                st.header("🚀 Action Items")
+        st.header("🔍 Missing Keywords")
 
-                for item in data.get("action_items", []):
-                    st.write("✅", item)
+        for item in feedback.get("missing_keywords", []):
+            st.warning(item)
 
-            except Exception as e:
+        st.header("📄 Formatting Feedback")
 
-                st.error("Error while analyzing resume.")
-                st.exception(e)
+        for item in feedback.get("formatting_feedback", []):
+            st.write("•", item)
+
+        st.header("🚀 Action Items")
+
+        for item in feedback.get("action_items", []):
+            st.write("✅", item)
